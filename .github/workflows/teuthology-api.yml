@@ -43,46 +43,49 @@ jobs:
           echo "Base: ${{ steps.branch-info.outputs.base_ref }}"
           echo "Owner: ${{ github.actor }}"
           
-          # Prepare the API request payload matching teuthology-api format
-          PAYLOAD=$(cat <<EOF
-          {
-            "--dry-run": true,
-            "--non-interactive": true,
-            "--verbose": 1,
-            "--ceph": "main",
-            "--ceph-repo": "https://github.com/ceph/ceph-ci.git",
-            "--machine-type": "smithi",
-            "--suite": "teuthology/nop",
-            "--suite-repo": "https://github.com/ceph/ceph.git",
-            "--priority": "1",
-            "--force-priority": true,
-            "--owner": "${{ github.actor }}"
-          }
-          EOF
-          )
-          
-          echo "Payload: $PAYLOAD"
-          
           # Make the API call
           echo "Calling: ${TEUTHOLOGY_API_URL}/suite/?logs=false"
           
-          # Build curl command with optional auth header
-          CURL_CMD="curl -s -w \"\n%{http_code}\" -X POST"
-          CURL_CMD="$CURL_CMD \"${TEUTHOLOGY_API_URL}/suite/?logs=false\""
-          CURL_CMD="$CURL_CMD -H \"accept: application/json\""
-          CURL_CMD="$CURL_CMD -H \"Content-Type: application/json\""
-          
-          # Add auth header if token is available
           if [ -n "$TEUTHOLOGY_API_TOKEN" ]; then
             echo "Using authentication token"
-            CURL_CMD="$CURL_CMD -H \"Authorization: Bearer $TEUTHOLOGY_API_TOKEN\""
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              "${TEUTHOLOGY_API_URL}/suite/?logs=false" \
+              -H "accept: application/json" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${TEUTHOLOGY_API_TOKEN}" \
+              -d '{
+                "--dry-run": true,
+                "--non-interactive": true,
+                "--verbose": 1,
+                "--ceph": "main",
+                "--ceph-repo": "https://github.com/ceph/ceph-ci.git",
+                "--machine-type": "smithi",
+                "--suite": "teuthology/nop",
+                "--suite-repo": "https://github.com/ceph/ceph.git",
+                "--priority": "1",
+                "--force-priority": true,
+                "--owner": "${{ github.actor }}"
+              }')
           else
             echo "::warning::No TEUTHOLOGY_API_TOKEN set - making unauthenticated request"
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              "${TEUTHOLOGY_API_URL}/suite/?logs=false" \
+              -H "accept: application/json" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "--dry-run": true,
+                "--non-interactive": true,
+                "--verbose": 1,
+                "--ceph": "main",
+                "--ceph-repo": "https://github.com/ceph/ceph-ci.git",
+                "--machine-type": "smithi",
+                "--suite": "teuthology/nop",
+                "--suite-repo": "https://github.com/ceph/ceph.git",
+                "--priority": "1",
+                "--force-priority": true,
+                "--owner": "${{ github.actor }}"
+              }')
           fi
-          
-          CURL_CMD="$CURL_CMD -d '$PAYLOAD'"
-          
-          RESPONSE=$(eval $CURL_CMD)
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
