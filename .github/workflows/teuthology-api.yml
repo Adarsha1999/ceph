@@ -1,0 +1,129 @@
+---
+name: "Teuthology API Jobs"
+
+on:
+  pull_request_target:
+    types:
+      - labeled
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TEUTHOLOGY_API_URL: ${{ secrets.TEUTHOLOGY_API_URL }}
+
+jobs:
+  # Trigger teuthology/nop test for testing the workflow
+  trigger-teuthology-nop:
+    runs-on: ubuntu-latest
+    if: github.event.label.name == 'run-teuthology-nop'
+    steps:
+      - name: Determine branch information
+        id: branch-info
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          PR_BASE_REF="${{ github.event.pull_request.base.ref }}"
+          SHORT_SHA="${PR_HEAD_SHA:0:8}"
+          
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "sha=$PR_HEAD_SHA" >> $GITHUB_OUTPUT
+          echo "base_ref=$PR_BASE_REF" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+
+      - name: Trigger Teuthology API - teuthology/nop
+        id: trigger-api
+        run: |
+          echo "=== Teuthology NOP Test ==="
+          echo "PR: #${{ steps.branch-info.outputs.pr_number }}"
+          echo "SHA: ${{ steps.branch-info.outputs.sha }}"
+          echo "Base: ${{ steps.branch-info.outputs.base_ref }}"
+          
+          # Check if API URL is configured
+          if [ -z "$TEUTHOLOGY_API_URL" ]; then
+            echo "::warning::TEUTHOLOGY_API_URL not set - running in dry-run mode"
+            echo "dry_run=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Prepare the API request payload
+          PAYLOAD=$(cat <<EOF
+          {
+            "suite": "teuthology/nop",
+            "ceph_branch": "${{ steps.branch-info.outputs.base_ref }}",
+            "machine_type": "smithi",
+            "priority": 1,
+            "pr_number": ${{ steps.branch-info.outputs.pr_number }},
+            "requester": "${{ github.actor }}"
+          }
+          EOF
+          )
+          
+          echo "Payload: $PAYLOAD"
+          
+          # Make the API call
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "${TEUTHOLOGY_API_URL}/suite" \
+            -H "Authorization: Bearer ${{ secrets.TEUTHOLOGY_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "HTTP Code: $HTTP_CODE"
+          echo "Response: $BODY"
+          
+          echo "response_code=$HTTP_CODE" >> $GITHUB_OUTPUT
+          echo "dry_run=false" >> $GITHUB_OUTPUT
+          
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "✅ Successfully triggered teuthology/nop"
+          else
+            echo "::error::Failed to trigger. HTTP $HTTP_CODE: $BODY"
+            exit 1
+          fi
+
+      - name: Post comment on PR
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const isDryRun = '${{ steps.trigger-api.outputs.dry_run }}' === 'true';
+            
+            let body;
+            if (isDryRun) {
+              body = `🧪 **Teuthology NOP Test (Dry Run)**
+              
+            ⚠️ Running in dry-run mode - \`TEUTHOLOGY_API_URL\` secret not configured.
+            
+            | Parameter | Value |
+            |-----------|-------|
+            | Suite | \`teuthology/nop\` |
+            | PR | #${{ steps.branch-info.outputs.pr_number }} |
+            | SHA | \`${{ steps.branch-info.outputs.short_sha }}\` |
+            | Triggered by | @${{ github.actor }} |
+            
+            > Configure the \`TEUTHOLOGY_API_URL\` and \`TEUTHOLOGY_API_TOKEN\` secrets to enable actual API calls.`;
+            } else {
+              body = `🧪 **Teuthology NOP Test Triggered**
+              
+            | Parameter | Value |
+            |-----------|-------|
+            | Suite | \`teuthology/nop\` |
+            | PR | #${{ steps.branch-info.outputs.pr_number }} |
+            | SHA | \`${{ steps.branch-info.outputs.short_sha }}\` |
+            | Priority | 1 (highest) |
+            | Triggered by | @${{ github.actor }} |
+            
+            📊 Monitor at [Pulpito](http://pulpito.ceph.com/)`;
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
