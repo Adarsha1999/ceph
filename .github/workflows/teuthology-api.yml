@@ -58,7 +58,7 @@ jobs:
             -H "Content-Type: application/json" \
             -b "session=${TEUTHOLOGY_SESSION}" \
             -d '{
-              "--dry-run": true,
+              "--dry-run": false,
               "--suite": "teuthology/nop",
               "--ceph": "main",
               "--machine-type": "smithi",
