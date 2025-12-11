@@ -1,0 +1,122 @@
+---
+name: "Teuthology API Jobs"
+
+on:
+  pull_request_target:
+    types:
+      - labeled
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TEUTHOLOGY_API_URL: ${{ secrets.TEUTHOLOGY_API_URL }}
+
+jobs:
+  # Trigger teuthology/nop test for testing the workflow
+  trigger-teuthology-nop:
+    runs-on: ubuntu-latest
+    if: github.event.label.name == 'run-teuthology-nop'
+    steps:
+      - name: Determine branch information
+        id: branch-info
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          PR_BASE_REF="${{ github.event.pull_request.base.ref }}"
+          SHORT_SHA="${PR_HEAD_SHA:0:8}"
+          
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "sha=$PR_HEAD_SHA" >> $GITHUB_OUTPUT
+          echo "base_ref=$PR_BASE_REF" >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+
+      - name: Trigger Teuthology API - teuthology/nop
+        id: trigger-api
+        run: |
+          echo "=== Teuthology NOP Test ==="
+          echo "PR: #${{ steps.branch-info.outputs.pr_number }}"
+          echo "SHA: ${{ steps.branch-info.outputs.sha }}"
+          echo "Base: ${{ steps.branch-info.outputs.base_ref }}"
+          
+          # Prepare the API request payload matching teuthology-api format
+          PAYLOAD=$(cat <<'EOF'
+          {
+            "--dry-run": true,
+            "--non-interactive": true,
+            "--verbose": 1,
+            "--ceph": "main",
+            "--ceph-repo": "https://github.com/ceph/ceph-ci.git",
+            "--machine-type": "smithi",
+            "--suite": "teuthology/nop",
+            "--suite-repo": "https://github.com/ceph/ceph.git",
+            "--priority": "1",
+            "--force-priority": true
+          }
+          EOF
+          )
+          
+          echo "Payload: $PAYLOAD"
+          
+          # Make the API call
+          echo "Calling: ${TEUTHOLOGY_API_URL}/suite/?logs=false"
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "${TEUTHOLOGY_API_URL}/suite/?logs=false" \
+            -H "accept: application/json" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "HTTP Code: $HTTP_CODE"
+          echo "Response: $BODY"
+          
+          echo "response_code=$HTTP_CODE" >> $GITHUB_OUTPUT
+          echo "response_body<<EOFBODY" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOFBODY" >> $GITHUB_OUTPUT
+          
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "✅ Successfully triggered teuthology/nop"
+          else
+            echo "::warning::API call returned HTTP $HTTP_CODE"
+          fi
+
+      - name: Post comment on PR
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const httpCode = '${{ steps.trigger-api.outputs.response_code }}';
+            const responseBody = `${{ steps.trigger-api.outputs.response_body }}`;
+            
+            const body = `🧪 **Teuthology NOP Test (Dry Run)**
+            
+            | Parameter | Value |
+            |-----------|-------|
+            | Suite | \`teuthology/nop\` |
+            | Branch | \`main\` |
+            | Machine Type | \`smithi\` |
+            | Priority | 1 |
+            | PR | #${{ steps.branch-info.outputs.pr_number }} |
+            | SHA | \`${{ steps.branch-info.outputs.short_sha }}\` |
+            | Triggered by | @${{ github.actor }} |
+            
+            **API Response:** HTTP ${httpCode}
+            \`\`\`json
+            ${responseBody}
+            \`\`\`
+            
+            📊 Monitor at [Pulpito](http://pulpito.ceph.com/)
+            🔗 API: [teuthology-api.sepia.ceph.com](https://teuthology-api.sepia.ceph.com/docs)`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
