@@ -34,14 +34,17 @@ jobs:
 
       - name: Trigger Teuthology API - teuthology/nop
         id: trigger-api
+        env:
+          TEUTHOLOGY_API_TOKEN: ${{ secrets.TEUTHOLOGY_API_TOKEN }}
         run: |
           echo "=== Teuthology NOP Test ==="
           echo "PR: #${{ steps.branch-info.outputs.pr_number }}"
           echo "SHA: ${{ steps.branch-info.outputs.sha }}"
           echo "Base: ${{ steps.branch-info.outputs.base_ref }}"
+          echo "Owner: ${{ github.actor }}"
           
           # Prepare the API request payload matching teuthology-api format
-          PAYLOAD=$(cat <<'EOF'
+          PAYLOAD=$(cat <<EOF
           {
             "--dry-run": true,
             "--non-interactive": true,
@@ -52,7 +55,8 @@ jobs:
             "--suite": "teuthology/nop",
             "--suite-repo": "https://github.com/ceph/ceph.git",
             "--priority": "1",
-            "--force-priority": true
+            "--force-priority": true,
+            "--owner": "${{ github.actor }}"
           }
           EOF
           )
@@ -62,11 +66,23 @@ jobs:
           # Make the API call
           echo "Calling: ${TEUTHOLOGY_API_URL}/suite/?logs=false"
           
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "${TEUTHOLOGY_API_URL}/suite/?logs=false" \
-            -H "accept: application/json" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
+          # Build curl command with optional auth header
+          CURL_CMD="curl -s -w \"\n%{http_code}\" -X POST"
+          CURL_CMD="$CURL_CMD \"${TEUTHOLOGY_API_URL}/suite/?logs=false\""
+          CURL_CMD="$CURL_CMD -H \"accept: application/json\""
+          CURL_CMD="$CURL_CMD -H \"Content-Type: application/json\""
+          
+          # Add auth header if token is available
+          if [ -n "$TEUTHOLOGY_API_TOKEN" ]; then
+            echo "Using authentication token"
+            CURL_CMD="$CURL_CMD -H \"Authorization: Bearer $TEUTHOLOGY_API_TOKEN\""
+          else
+            echo "::warning::No TEUTHOLOGY_API_TOKEN set - making unauthenticated request"
+          fi
+          
+          CURL_CMD="$CURL_CMD -d '$PAYLOAD'"
+          
+          RESPONSE=$(eval $CURL_CMD)
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
