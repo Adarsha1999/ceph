@@ -11,7 +11,8 @@ permissions:
   pull-requests: write
 
 env:
-  TEUTHOLOGY_API_URL: ${{ secrets.TEUTHOLOGY_API_URL }}
+  # Teuthology API endpoint (public, no need for secret)
+  TEUTHOLOGY_API_URL: "https://teuthology-api.sepia.ceph.com"
 
 jobs:
   # Trigger teuthology/nop test for testing the workflow
@@ -35,7 +36,7 @@ jobs:
       - name: Trigger Teuthology API - teuthology/nop
         id: trigger-api
         env:
-          TEUTHOLOGY_API_TOKEN: ${{ secrets.TEUTHOLOGY_API_TOKEN }}
+          TEUTHOLOGY_SESSION: ${{ secrets.TEUTHOLOGY_SESSION }}
         run: |
           echo "=== Teuthology NOP Test ==="
           echo "PR: #${{ steps.branch-info.outputs.pr_number }}"
@@ -43,49 +44,27 @@ jobs:
           echo "Base: ${{ steps.branch-info.outputs.base_ref }}"
           echo "Owner: ${{ github.actor }}"
           
-          # Make the API call
+          # Check for session cookie
+          if [ -z "$TEUTHOLOGY_SESSION" ]; then
+            echo "::error::TEUTHOLOGY_SESSION secret is not set"
+            exit 1
+          fi
+          
+          echo "Using session cookie authentication"
           echo "Calling: ${TEUTHOLOGY_API_URL}/suite/?logs=false"
           
-          if [ -n "$TEUTHOLOGY_API_TOKEN" ]; then
-            echo "Using authentication token"
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              "${TEUTHOLOGY_API_URL}/suite/?logs=false" \
-              -H "accept: application/json" \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer ${TEUTHOLOGY_API_TOKEN}" \
-              -d '{
-                "--dry-run": true,
-                "--non-interactive": true,
-                "--verbose": 1,
-                "--ceph": "main",
-                "--ceph-repo": "https://github.com/ceph/ceph-ci.git",
-                "--machine-type": "smithi",
-                "--suite": "teuthology/nop",
-                "--suite-repo": "https://github.com/ceph/ceph.git",
-                "--priority": "1",
-                "--force-priority": true,
-                "--owner": "${{ github.actor }}"
-              }')
-          else
-            echo "::warning::No TEUTHOLOGY_API_TOKEN set - making unauthenticated request"
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              "${TEUTHOLOGY_API_URL}/suite/?logs=false" \
-              -H "accept: application/json" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "--dry-run": true,
-                "--non-interactive": true,
-                "--verbose": 1,
-                "--ceph": "main",
-                "--ceph-repo": "https://github.com/ceph/ceph-ci.git",
-                "--machine-type": "smithi",
-                "--suite": "teuthology/nop",
-                "--suite-repo": "https://github.com/ceph/ceph.git",
-                "--priority": "1",
-                "--force-priority": true,
-                "--owner": "${{ github.actor }}"
-              }')
-          fi
+          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 120 -X POST \
+            "${TEUTHOLOGY_API_URL}/suite/?logs=false" \
+            -H "Content-Type: application/json" \
+            -b "session=${TEUTHOLOGY_SESSION}" \
+            -d '{
+              "--dry-run": true,
+              "--suite": "teuthology/nop",
+              "--ceph": "main",
+              "--machine-type": "smithi",
+              "--priority": "70",
+              "--owner": "${{ github.actor }}"
+            }')
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
@@ -101,7 +80,8 @@ jobs:
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
             echo "✅ Successfully triggered teuthology/nop"
           else
-            echo "::warning::API call returned HTTP $HTTP_CODE"
+            echo "::error::API call failed with HTTP $HTTP_CODE"
+            exit 1
           fi
 
       - name: Post comment on PR
